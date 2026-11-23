@@ -7,31 +7,23 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import com.aircontrol.app.R
 import com.aircontrol.app.databinding.ActivityMainBinding
 import com.aircontrol.app.model.GestureState
 import com.aircontrol.app.service.GestureService
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import kotlinx.coroutines.launch
 
 /**
- * Main Activity — the user control panel.
- *
- * Layout sections:
- *   1. Live camera preview (front camera, landmarks overlaid)
- *   2. Gesture status chip (current gesture + last action)
- *   3. START / STOP gesture control button
- *   4. Permission status indicators (camera, accessibility, overlay)
- *   5. Quick links: Gesture Config, Calibration
+ * Main Activity — Futuristic Gesture Control Panel
+ * Features automatic permission onboarding and live HUD preview.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -46,13 +38,20 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         updatePermissionStatus()
-        if (granted) showToast("Camera permission granted ✓")
-        else showToast("Camera permission required for hand tracking")
+        if (granted) {
+            showToast("Camera permission granted ✓")
+            checkAndAutoRequestPermissions()
+        } else {
+            showToast("Camera permission is required for touchless control")
+        }
     }
 
     private val notifPermLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { updatePermissionStatus() }
+    ) {
+        updatePermissionStatus()
+        checkAndAutoRequestPermissions()
+    }
 
     // -------------------------------------------------------------------------
     // Activity lifecycle
@@ -71,9 +70,65 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updatePermissionStatus()
-        // If service is running, re-attach preview
+
         if (GestureService.instance != null) {
             GestureService.instance?.attachPreview(binding.previewView)
+        } else {
+            checkAndAutoRequestPermissions()
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Detach preview when leaving screen; background tracking continues smoothly!
+        GestureService.instance?.detachPreview()
+    }
+
+    // -------------------------------------------------------------------------
+    // Automatic Permission Walkthrough
+    // -------------------------------------------------------------------------
+
+    private fun checkAndAutoRequestPermissions() {
+        if (!cameraGranted()) {
+            cameraPermLauncher.launch(Manifest.permission.CAMERA)
+            return
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notifGranted()) {
+            notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+
+        if (!Settings.canDrawOverlays(this)) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("⚡ Futuristic Floating HUD")
+                .setMessage("Allow 'Display over other apps' so the glowing gesture orb can float over your screen and control your phone across any app!")
+                .setPositiveButton("Allow") { _, _ ->
+                    startActivity(Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    ))
+                }
+                .setNegativeButton("Later", null)
+                .show()
+            return
+        }
+
+        if (!accessibilityEnabled()) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("🖐️ Enable AirControl Service")
+                .setMessage("Tap 'Enable' and toggle 'AirControl Gesture Service' ON to unlock touchless gestures!")
+                .setPositiveButton("Enable") { _, _ ->
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }
+                .setNegativeButton("Later", null)
+                .show()
+            return
+        }
+
+        // All permissions granted: auto-start gesture control!
+        if (GestureService.instance == null) {
+            startGestureService()
         }
     }
 
@@ -124,13 +179,13 @@ class MainActivity : AppCompatActivity() {
         binding.btnStop.isEnabled  = serviceRunning
 
         binding.chipGesture.text = if (serviceRunning) {
-            "👋 ${state.currentGesture.name.replace('_', ' ')}  →  ${state.lastAction.name.replace('_', ' ')}"
+            "⚡ ${state.currentGesture.name.replace('_', ' ')}  →  ${state.lastAction.name.replace('_', ' ')}"
         } else {
-            "Gesture tracking stopped"
+            "Gesture tracking standby"
         }
 
         binding.tvFps.text = if (serviceRunning && state.landmarksVisible)
-            "Hand detected" else if (serviceRunning) "No hand detected" else ""
+            "● LIVE HAND TRACKED" else if (serviceRunning) "○ SCANNING..." else ""
     }
 
     // -------------------------------------------------------------------------
@@ -139,33 +194,30 @@ class MainActivity : AppCompatActivity() {
 
     private fun startGestureService() {
         if (!cameraGranted()) {
-            showToast("Grant camera permission first")
+            cameraPermLauncher.launch(Manifest.permission.CAMERA)
             return
         }
         if (!accessibilityEnabled()) {
-            showToast("Enable AirControl in Accessibility Settings first")
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             return
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (!notifGranted()) {
-                notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                return
-            }
-        }
+
         val intent = Intent(this, GestureService::class.java)
         startForegroundService(intent)
-        // Attach preview after short delay (service needs to start first)
+
         binding.previewView.postDelayed({
             GestureService.instance?.attachPreview(binding.previewView)
         }, 500)
-        showToast("AirControl started – wave your hand!")
+
+        showToast("⚡ AirControl HUD Online! Wave your hand!")
     }
 
     private fun stopGestureService() {
-        val intent = Intent(this, GestureService::class.java)
-            .setAction(GestureService.ACTION_STOP_SERVICE)
+        val intent = Intent(this, GestureService::class.java).apply {
+            action = GestureService.ACTION_STOP_SERVICE
+        }
         startService(intent)
-        showToast("AirControl stopped")
+        showToast("AirControl offline")
     }
 
     // -------------------------------------------------------------------------
@@ -183,7 +235,6 @@ class MainActivity : AppCompatActivity() {
         else true
 
     private fun accessibilityEnabled(): Boolean {
-        // Check if our service is listed as running
         val enabledServices = Settings.Secure.getString(
             contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
         ) ?: return false
@@ -191,27 +242,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updatePermissionStatus() {
+        val cam = cameraGranted()
+        val acc = accessibilityEnabled()
+        val ovl = Settings.canDrawOverlays(this)
+
         binding.chipCamera.apply {
-            isChecked = cameraGranted()
-            text = if (cameraGranted()) "Camera ✓" else "Camera ✗"
+            isChecked = cam
+            text = if (cam) "Camera ✓" else "Camera ✗"
         }
         binding.chipAccessibility.apply {
-            val ok = accessibilityEnabled()
-            isChecked = ok
-            text = if (ok) "Accessibility ✓" else "Accessibility ✗"
+            isChecked = acc
+            text = if (acc) "Accessibility ✓" else "Accessibility ✗"
         }
         binding.chipOverlay.apply {
-            val ok = Settings.canDrawOverlays(this@MainActivity)
-            isChecked = ok
-            text = if (ok) "Overlay ✓" else "Overlay ✗"
+            isChecked = ovl
+            text = if (ovl) "Floating HUD ✓" else "Floating HUD ✗"
         }
-        // Show/hide permission grant buttons
-        binding.btnGrantCamera.visibility =
-            if (cameraGranted()) android.view.View.GONE else android.view.View.VISIBLE
-        binding.btnGrantAccessibility.visibility =
-            if (accessibilityEnabled()) android.view.View.GONE else android.view.View.VISIBLE
-        binding.btnGrantOverlay.visibility =
-            if (Settings.canDrawOverlays(this)) android.view.View.GONE else android.view.View.VISIBLE
+
+        binding.btnGrantCamera.visibility = if (cam) android.view.View.GONE else android.view.View.VISIBLE
+        binding.btnGrantAccessibility.visibility = if (acc) android.view.View.GONE else android.view.View.VISIBLE
+        binding.btnGrantOverlay.visibility = if (ovl) android.view.View.GONE else android.view.View.VISIBLE
     }
 
     private fun showToast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()

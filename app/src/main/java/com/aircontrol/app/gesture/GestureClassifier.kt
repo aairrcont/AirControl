@@ -4,23 +4,14 @@ import com.aircontrol.app.model.GestureResult
 import com.aircontrol.app.model.GestureType
 import com.aircontrol.app.model.HandLandmarks
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
-import kotlin.math.abs
 import kotlin.math.hypot
-import kotlin.math.sqrt
 
 /**
- * Stateless classifier: given a list of 21 MediaPipe NormalizedLandmarks,
- * returns the best-guess GestureType and a confidence score.
- *
- * All positions are normalised [0,1] in image space (x=right, y=down).
+ * Geometric AI classifier: translates 21 MediaPipe NormalizedLandmarks
+ * into instant, reliable gesture recognition.
  */
 object GestureClassifier {
 
-    /**
-     * Classify a hand pose from its 21 landmarks.
-     * @param landmarks  Normalized landmarks from MediaPipe (index matches HandLandmarks constants)
-     * @param handedness "Left" or "Right" as reported by MediaPipe
-     */
     fun classify(
         landmarks: List<NormalizedLandmark>,
         handedness: String = "Right"
@@ -29,10 +20,8 @@ object GestureClassifier {
             return GestureResult(GestureType.UNKNOWN, 0f, landmarks.size, handedness)
         }
 
-        // ---- extract key y-coordinates (normalized image: y=0 is top) ----
         val wrist        = landmarks[HandLandmarks.WRIST]
         val thumbTip     = landmarks[HandLandmarks.THUMB_TIP]
-        val thumbIp      = landmarks[HandLandmarks.THUMB_IP]
         val thumbMcp     = landmarks[HandLandmarks.THUMB_MCP]
         val indexTip     = landmarks[HandLandmarks.INDEX_TIP]
         val indexPip     = landmarks[HandLandmarks.INDEX_PIP]
@@ -43,58 +32,51 @@ object GestureClassifier {
         val pinkyTip     = landmarks[HandLandmarks.PINKY_TIP]
         val pinkyPip     = landmarks[HandLandmarks.PINKY_PIP]
 
-        val handSize     = handSpan(landmarks) // normalised palm width
+        val handSize = handSpan(landmarks)
 
-        // ---- determine which fingers are extended (tip above pip) --------
-        val indexUp  = indexTip.y()  < indexPip.y()  - handSize * 0.05f
-        val middleUp = middleTip.y() < middlePip.y() - handSize * 0.05f
-        val ringUp   = ringTip.y()   < ringPip.y()   - handSize * 0.05f
-        val pinkyUp  = pinkyTip.y()  < pinkyPip.y()  - handSize * 0.05f
+        // 1. Check vertical extension of fingers
+        val indexUp  = indexTip.y()  < indexPip.y()  - handSize * 0.04f
+        val middleUp = middleTip.y() < middlePip.y() - handSize * 0.04f
+        val ringUp   = ringTip.y()   < ringPip.y()   - handSize * 0.04f
+        val pinkyUp  = pinkyTip.y()  < pinkyPip.y()  - handSize * 0.04f
 
-        // Thumb: compare tip x vs MCP x (flipped for left hand)
-        val thumbFactor = if (handedness == "Left") -1f else 1f
-        val thumbUp   = (thumbTip.x() - thumbMcp.x()) * thumbFactor < -handSize * 0.1f
-        val thumbDown = (thumbTip.x() - thumbMcp.x()) * thumbFactor >  handSize * 0.1f
+        // 2. Vertical thumb detection (Thumb Up vs Thumb Down)
+        val thumbPointingUp = thumbTip.y() < thumbMcp.y() - handSize * 0.15f
+        val thumbPointingDown = thumbTip.y() > thumbMcp.y() + handSize * 0.15f
 
-        // ---- pinch: index tip close to thumb tip -------------------------
+        // 3. Pinch detection (index tip close to thumb tip)
         val pinchDist = dist(indexTip, thumbTip)
-        val isPinch = pinchDist < handSize * 0.25f
+        val isPinch = pinchDist < handSize * 0.22f
 
-        // ---- classify pose -----------------------------------------------
         return when {
-            // OPEN PALM: all 4 fingers + thumb extended
-            indexUp && middleUp && ringUp && pinkyUp && !isPinch -> {
+            // PINCH: index & thumb close together
+            isPinch -> {
+                GestureResult(GestureType.PINCH, 0.92f, 21, handedness)
+            }
+            // OPEN PALM: all 4 fingers spread open & upright
+            indexUp && middleUp && ringUp && pinkyUp -> {
                 GestureResult(GestureType.OPEN_PALM, 0.95f, 21, handedness)
             }
-            // CLOSED FIST: no fingers extended
-            !indexUp && !middleUp && !ringUp && !pinkyUp && !isPinch -> {
-                GestureResult(GestureType.CLOSED_FIST, 0.90f, 21, handedness)
-            }
-            // TWO FINGERS UP (peace sign): index + middle up, ring + pinky down
+            // TWO FINGERS UP (Peace / Victory sign)
             indexUp && middleUp && !ringUp && !pinkyUp -> {
-                GestureResult(GestureType.TWO_FINGERS_UP, 0.90f, 21, handedness)
+                GestureResult(GestureType.TWO_FINGERS_UP, 0.92f, 21, handedness)
             }
-            // THUMB UP: thumb up, all other fingers curled
-            thumbUp && !indexUp && !middleUp && !ringUp && !pinkyUp -> {
-                GestureResult(GestureType.THUMB_UP, 0.88f, 21, handedness)
+            // THUMB UP: thumb points up, other fingers curled
+            thumbPointingUp && !indexUp && !middleUp && !ringUp && !pinkyUp -> {
+                GestureResult(GestureType.THUMB_UP, 0.90f, 21, handedness)
             }
-            // THUMB DOWN: thumb down, all other fingers curled
-            thumbDown && !indexUp && !middleUp && !ringUp && !pinkyUp -> {
-                GestureResult(GestureType.THUMB_DOWN, 0.88f, 21, handedness)
+            // THUMB DOWN: thumb points down, other fingers curled
+            thumbPointingDown && !indexUp && !middleUp && !ringUp && !pinkyUp -> {
+                GestureResult(GestureType.THUMB_DOWN, 0.90f, 21, handedness)
             }
-            // PINCH: index tip near thumb tip
-            isPinch -> {
-                GestureResult(GestureType.PINCH, 0.85f, 21, handedness)
+            // CLOSED FIST: all fingers curled
+            !indexUp && !middleUp && !ringUp && !pinkyUp && !thumbPointingUp && !thumbPointingDown -> {
+                GestureResult(GestureType.CLOSED_FIST, 0.90f, 21, handedness)
             }
             else -> GestureResult(GestureType.UNKNOWN, 0.4f, 21, handedness)
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Helpers
-    // -----------------------------------------------------------------------
-
-    /** Approximate palm width from wrist to middle MCP. */
     private fun handSpan(lm: List<NormalizedLandmark>): Float {
         return dist(lm[HandLandmarks.WRIST], lm[HandLandmarks.MIDDLE_MCP]).coerceAtLeast(0.05f)
     }

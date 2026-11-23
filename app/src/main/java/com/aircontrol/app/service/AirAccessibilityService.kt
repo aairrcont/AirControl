@@ -5,6 +5,7 @@ import android.accessibilityservice.GestureDescription
 import android.content.Context
 import android.graphics.Path
 import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -14,24 +15,14 @@ import com.aircontrol.app.model.PhoneAction
 
 /**
  * Phase 4 – Phone controls via AccessibilityService.
- *
- * All gesture → action dispatches arrive through execute(PhoneAction).
- * No automatic or background action happens without a confirmed gesture.
- *
- * Actions supported:
- *   SCROLL_UP / SCROLL_DOWN  → screen swipe gesture
- *   NEXT / PREVIOUS          → horizontal swipe
- *   BACK                     → GLOBAL_ACTION_BACK
- *   PAUSE / PLAY             → AudioManager media key (KeyEvent.KEYCODE_MEDIA_*)
- *   VOLUME_UP / VOLUME_DOWN  → AudioManager adjustVolume
- *   SELECT                   → simulate tap at screen centre
+ * Executes system gestures with futuristic sci-fi audio and tactile haptic feedback.
  */
 class AirAccessibilityService : AccessibilityService() {
 
     private lateinit var audioManager: AudioManager
+    private var toneGenerator: ToneGenerator? = null
 
     companion object {
-        /** Singleton reference so GestureService can call execute() directly */
         var instance: AirAccessibilityService? = null
             private set
     }
@@ -40,12 +31,17 @@ class AirAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
+        try {
+            toneGenerator = ToneGenerator(AudioManager.STREAM_SYSTEM, 65)
+        } catch (_: Exception) {}
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
+        toneGenerator?.release()
+        toneGenerator = null
         instance = null
         super.onDestroy()
     }
@@ -55,12 +51,12 @@ class AirAccessibilityService : AccessibilityService() {
     // -----------------------------------------------------------------------
 
     fun execute(action: PhoneAction) {
-        hapticPulse()
+        futuristicFeedback()
         when (action) {
-            PhoneAction.SCROLL_UP    -> swipe(Direction.UP)
-            PhoneAction.SCROLL_DOWN  -> swipe(Direction.DOWN)
-            PhoneAction.NEXT         -> swipe(Direction.LEFT)
-            PhoneAction.PREVIOUS     -> swipe(Direction.RIGHT)
+            PhoneAction.SCROLL_UP    -> scrollPage(up = true)
+            PhoneAction.SCROLL_DOWN  -> scrollPage(up = false)
+            PhoneAction.NEXT         -> swipeHorizontal(next = true)
+            PhoneAction.PREVIOUS     -> swipeHorizontal(next = false)
             PhoneAction.BACK         -> performGlobalAction(GLOBAL_ACTION_BACK)
             PhoneAction.PAUSE        -> adjustMedia(false)
             PhoneAction.PLAY         -> adjustMedia(true)
@@ -77,26 +73,28 @@ class AirAccessibilityService : AccessibilityService() {
     // Screen gesture helpers
     // -----------------------------------------------------------------------
 
-    private enum class Direction { UP, DOWN, LEFT, RIGHT }
-
-    private fun swipe(direction: Direction) {
-        val cx = resources.displayMetrics.widthPixels  / 2f
+    private fun scrollPage(up: Boolean) {
+        val cx = resources.displayMetrics.widthPixels / 2f
         val cy = resources.displayMetrics.heightPixels / 2f
 
-        val (x1, y1, x2, y2) = when (direction) {
-            Direction.UP    -> floatArrayOf(cx, cy + 400f, cx, cy - 400f)
-            Direction.DOWN  -> floatArrayOf(cx, cy - 400f, cx, cy + 400f)
-            Direction.LEFT  -> floatArrayOf(cx + 400f, cy, cx - 400f, cy)
-            Direction.RIGHT -> floatArrayOf(cx - 400f, cy, cx + 400f, cy)
-        }
-        dispatchSwipe(x1, y1, x2, y2, durationMs = 250)
+        // When scrolling down, finger swipes upward: bottom -> top
+        val (y1, y2) = if (up) (cy - 500f to cy + 500f) else (cy + 500f to cy - 500f)
+        dispatchSwipe(cx, y1, cx, y2, durationMs = 220)
+    }
+
+    private fun swipeHorizontal(next: Boolean) {
+        val cx = resources.displayMetrics.widthPixels / 2f
+        val cy = resources.displayMetrics.heightPixels / 2f
+
+        val (x1, x2) = if (next) (cx + 350f to cx - 350f) else (cx - 350f to cx + 350f)
+        dispatchSwipe(x1, cy, x2, cy, durationMs = 220)
     }
 
     private fun tapCenter() {
         val cx = resources.displayMetrics.widthPixels  / 2f
         val cy = resources.displayMetrics.heightPixels / 2f
         val path = Path().apply { moveTo(cx, cy) }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 1)
+        val stroke = GestureDescription.StrokeDescription(path, 0, 100)
         dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
     }
 
@@ -107,7 +105,7 @@ class AirAccessibilityService : AccessibilityService() {
     }
 
     // -----------------------------------------------------------------------
-    // Media playback control via AudioManager transport
+    // Media playback control
     // -----------------------------------------------------------------------
 
     private fun adjustMedia(play: Boolean) {
@@ -120,18 +118,22 @@ class AirAccessibilityService : AccessibilityService() {
     }
 
     // -----------------------------------------------------------------------
-    // Haptic feedback
+    // Futuristic sci-fi sound beep & haptic pulse
     // -----------------------------------------------------------------------
 
-    private fun hapticPulse() {
+    private fun futuristicFeedback() {
+        try {
+            toneGenerator?.startTone(ToneGenerator.TONE_PROP_BEEP, 40)
+        } catch (_: Exception) {}
+
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val vm = getSystemService(VIBRATOR_MANAGER_SERVICE) as VibratorManager
-                vm.defaultVibrator.vibrate(VibrationEffect.createOneShot(40, 80))
+                vm.defaultVibrator.vibrate(VibrationEffect.createOneShot(35, 120))
             } else {
                 @Suppress("DEPRECATION")
                 val v = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
-                v.vibrate(VibrationEffect.createOneShot(40, 80))
+                v.vibrate(VibrationEffect.createOneShot(35, 120))
             }
         } catch (_: Exception) {}
     }

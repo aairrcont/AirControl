@@ -14,7 +14,6 @@ import androidx.lifecycle.LifecycleOwner
 import com.aircontrol.app.gesture.GestureClassifier
 import com.aircontrol.app.gesture.GestureEngine
 import com.aircontrol.app.model.GestureResult
-import com.aircontrol.app.model.GestureType
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
@@ -23,13 +22,8 @@ import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
 import java.util.concurrent.Executors
 
 /**
- * Manages CameraX front-camera preview + MediaPipe Hand Landmarker inference.
- * Runs analysis on a dedicated background executor.
- *
- * Usage:
- *   val manager = HandTrackingManager(context, engine)
- *   manager.start(lifecycleOwner, previewView)
- *   manager.stop()
+ * Manages CameraX front-camera + MediaPipe Hand Landmarker inference.
+ * Supports running in background (ImageAnalysis only) or foreground with a PreviewView.
  */
 class HandTrackingManager(
     private val context: Context,
@@ -41,11 +35,16 @@ class HandTrackingManager(
     private var cameraProvider: ProcessCameraProvider? = null
     private var frameTimestamp = 0L
 
+    private var currentLifecycleOwner: LifecycleOwner? = null
+    private var currentPreviewView: PreviewView? = null
+
     // -----------------------------------------------------------------------
     // Lifecycle
     // -----------------------------------------------------------------------
 
-    fun start(lifecycleOwner: LifecycleOwner, previewView: PreviewView) {
+    fun start(lifecycleOwner: LifecycleOwner, previewView: PreviewView? = null) {
+        currentLifecycleOwner = lifecycleOwner
+        currentPreviewView = previewView
         initLandmarker()
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
@@ -54,10 +53,26 @@ class HandTrackingManager(
         }, ContextCompat.getMainExecutor(context))
     }
 
+    fun attachPreview(previewView: PreviewView) {
+        currentPreviewView = previewView
+        currentLifecycleOwner?.let { owner ->
+            bindCamera(owner, previewView)
+        }
+    }
+
+    fun detachPreview() {
+        currentPreviewView = null
+        currentLifecycleOwner?.let { owner ->
+            bindCamera(owner, null)
+        }
+    }
+
     fun stop() {
         cameraProvider?.unbindAll()
         landmarker?.close()
         landmarker = null
+        currentLifecycleOwner = null
+        currentPreviewView = null
     }
 
     // -----------------------------------------------------------------------
@@ -65,15 +80,16 @@ class HandTrackingManager(
     // -----------------------------------------------------------------------
 
     private fun initLandmarker() {
+        if (landmarker != null) return
         val baseOptions = BaseOptions.builder()
             .setModelAssetPath("hand_landmarker.task")
             .build()
         val options = HandLandmarker.HandLandmarkerOptions.builder()
             .setBaseOptions(baseOptions)
             .setNumHands(1)
-            .setMinHandDetectionConfidence(0.6f)
-            .setMinHandPresenceConfidence(0.6f)
-            .setMinTrackingConfidence(0.6f)
+            .setMinHandDetectionConfidence(0.55f)
+            .setMinHandPresenceConfidence(0.55f)
+            .setMinTrackingConfidence(0.55f)
             .setRunningMode(RunningMode.LIVE_STREAM)
             .setResultListener(::handleLandmarkerResult)
             .setErrorListener { error -> error.printStackTrace() }
@@ -82,17 +98,14 @@ class HandTrackingManager(
     }
 
     // -----------------------------------------------------------------------
-    // CameraX binding
+    // CameraX binding: works with or without a PreviewView (Background safe!)
     // -----------------------------------------------------------------------
 
-    private fun bindCamera(lifecycleOwner: LifecycleOwner, previewView: PreviewView) {
+    private fun bindCamera(lifecycleOwner: LifecycleOwner, previewView: PreviewView? = null) {
+        val provider = cameraProvider ?: return
         val selector = CameraSelector.Builder()
             .requireLensFacing(CameraSelector.LENS_FACING_FRONT)
             .build()
-
-        val preview = Preview.Builder().build().also {
-            it.setSurfaceProvider(previewView.surfaceProvider)
-        }
 
         val analysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -101,8 +114,16 @@ class HandTrackingManager(
             .also { it.setAnalyzer(executor, ::analyzeFrame) }
 
         try {
-            cameraProvider?.unbindAll()
-            cameraProvider?.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
+            provider.unbindAll()
+            if (previewView != null) {
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
+                provider.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
+            } else {
+                // Background mode: only ImageAnalysis bound to lifecycle
+                provider.bindToLifecycle(lifecycleOwner, selector, analysis)
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -113,19 +134,29 @@ class HandTrackingManager(
     // -----------------------------------------------------------------------
 
     private fun analyzeFrame(imageProxy: ImageProxy) {
-        val bitmap  = imageProxy.toBitmap()
+        val lm = landmarker
+        if (lm == null) {
+            imageProxy.close()
+            return
+        }
+
+        val bitmap = imageProxy.toBitmap()
         val rotated = rotateBitmap(bitmap, imageProxy.imageInfo.rotationDegrees.toFloat())
         val mpImage = BitmapImageBuilder(rotated).build()
 
         frameTimestamp = System.currentTimeMillis()
-        landmarker?.detectAsync(mpImage, frameTimestamp)
+        lm.detectAsync(mpImage, frameTimestamp)
         imageProxy.close()
     }
 
     private fun handleLandmarkerResult(result: HandLandmarkerResult, input: com.google.mediapipe.framework.image.MPImage) {
-        if (result.landmarks().isEmpty()) return
+        if (result.landmarks().isEmpty()) {
+            val emptyResult = GestureResult(com.aircontrol.app.model.GestureType.UNKNOWN, 0f, 0, "None")
+            onResult(emptyResult, result)
+            return
+        }
 
-        val landmarks  = result.landmarks()[0]
+        val landmarks = result.landmarks()[0]
         val handedness = result.handednesses().firstOrNull()
             ?.firstOrNull()?.categoryName() ?: "Right"
 

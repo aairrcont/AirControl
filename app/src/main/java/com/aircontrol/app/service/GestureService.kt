@@ -4,9 +4,10 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.app.Service
 import android.content.Intent
+import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
 import androidx.camera.view.PreviewView
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.LifecycleService
@@ -17,6 +18,7 @@ import com.aircontrol.app.model.GestureResult
 import com.aircontrol.app.model.GestureState
 import com.aircontrol.app.model.GestureType
 import com.aircontrol.app.model.PhoneAction
+import com.aircontrol.app.ui.FloatingHudManager
 import com.aircontrol.app.ui.MainActivity
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
 import kotlinx.coroutines.CoroutineScope
@@ -27,29 +29,23 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /**
- * Foreground Service (Phase 1 + 2 + 3):
- *   - Runs with foregroundServiceType=camera so Android permits background camera use.
- *   - Hosts CameraX + MediaPipe via HandTrackingManager.
- *   - Bridges confirmed gestures → AirAccessibilityService.
- *   - Exposes GestureState via singleton StateFlow for the UI.
- *
- * Start:  Intent(context, GestureService::class.java).also { startForegroundService(it) }
- * Stop:   ACTION_STOP_SERVICE or stopService(intent)
+ * Foreground Service:
+ * - Hosts CameraX + MediaPipe in the background continuously.
+ * - Displays the Futuristic Floating HUD Orb over any app via WindowManager.
+ * - Bridges confirmed gestures to AirAccessibilityService.
  */
 class GestureService : LifecycleService() {
 
-    private val engine  = GestureEngine()
+    private val engine = GestureEngine()
     private lateinit var tracker: HandTrackingManager
+    private var floatingHud: FloatingHudManager? = null
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    // -----------------------------------------------------------------------
-    // Static companion: singleton observable state for UI
-    // -----------------------------------------------------------------------
     companion object {
         const val ACTION_STOP_SERVICE = "com.aircontrol.app.STOP"
-        const val CHANNEL_ID          = "aircontrol_gesture"
-        const val NOTIF_ID            = 1
+        const val CHANNEL_ID = "aircontrol_gesture"
+        const val NOTIF_ID = 1
 
         private val _state = MutableStateFlow(GestureState())
         val state: StateFlow<GestureState> = _state
@@ -58,27 +54,34 @@ class GestureService : LifecycleService() {
             private set
     }
 
-    // -----------------------------------------------------------------------
-    // Service lifecycle
-    // -----------------------------------------------------------------------
-
     override fun onCreate() {
         super.onCreate()
         instance = this
         createNotificationChannel()
-        startForeground(NOTIF_ID, buildNotification("Gesture tracking active"))
+        startForeground(NOTIF_ID, buildNotification("Touchless AirControl Active"))
 
         tracker = HandTrackingManager(this, engine, ::onGestureFrame)
 
-        // Collect confirmed gestures and dispatch to Accessibility Service
+        // Start camera analysis immediately in background bound to this LifecycleService
+        tracker.start(this, null)
+
+        // Initialize Futuristic Floating HUD if overlay permission is granted
+        if (Settings.canDrawOverlays(this)) {
+            floatingHud = FloatingHudManager(this).also { it.show() }
+        }
+
+        // Listen for confirmed gestures and trigger phone actions
         serviceScope.launch {
             engine.gestures.collect { pair ->
                 pair ?: return@collect
                 val (gesture, action) = pair
                 updateState(gesture, action)
+                floatingHud?.onGestureTriggered(gesture, action)
                 AirAccessibilityService.instance?.execute(action)
             }
         }
+
+        _state.value = GestureState(isRunning = true)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -87,13 +90,12 @@ class GestureService : LifecycleService() {
             stopSelf()
             return START_NOT_STICKY
         }
-        // Start camera here — called from UI via bound camera view
-        // The UI binds a PreviewView via startCamera(previewView)
-        _state.value = GestureState(isRunning = true)
         return START_STICKY
     }
 
     override fun onDestroy() {
+        floatingHud?.hide()
+        floatingHud = null
         tracker.stop()
         engine.reset()
         _state.value = GestureState(isRunning = false)
@@ -107,31 +109,33 @@ class GestureService : LifecycleService() {
     }
 
     // -----------------------------------------------------------------------
-    // Camera attachment (called from MainActivity after service is started)
+    // Camera attachment when MainActivity is in foreground
     // -----------------------------------------------------------------------
 
     fun attachPreview(previewView: PreviewView) {
-        tracker.start(this, previewView)
+        tracker.attachPreview(previewView)
+    }
+
+    fun detachPreview() {
+        tracker.detachPreview()
     }
 
     // -----------------------------------------------------------------------
-    // Frame callback
+    // Frame callback from MediaPipe
     // -----------------------------------------------------------------------
 
     private fun onGestureFrame(result: GestureResult, raw: HandLandmarkerResult) {
+        val hasLandmarks = raw.landmarks().isNotEmpty()
+        floatingHud?.updateHandPresence(hasLandmarks)
         _state.value = _state.value.copy(
-            currentGesture    = result.gesture,
-            landmarksVisible  = raw.landmarks().isNotEmpty()
+            currentGesture = result.gesture,
+            landmarksVisible = hasLandmarks
         )
     }
 
-    // -----------------------------------------------------------------------
-    // State & notification helpers
-    // -----------------------------------------------------------------------
-
     private fun updateState(gesture: GestureType, action: PhoneAction) {
         _state.value = _state.value.copy(currentGesture = gesture, lastAction = action)
-        updateNotification("Action: ${action.name.replace('_', ' ')}")
+        updateNotification("⚡ ${gesture.name} → ${action.name.replace('_', ' ')}")
     }
 
     private fun updateNotification(text: String) {
@@ -152,7 +156,7 @@ class GestureService : LifecycleService() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_gesture_indicator)
-            .setContentTitle("AirControl")
+            .setContentTitle("AirControl // Futuristic Gesture HUD")
             .setContentText(contentText)
             .setContentIntent(openPi)
             .addAction(R.drawable.ic_stop, "Stop", stopPi)
@@ -164,9 +168,9 @@ class GestureService : LifecycleService() {
     private fun createNotificationChannel() {
         val ch = NotificationChannel(
             CHANNEL_ID,
-            "Gesture Tracking",
+            "AirControl Active",
             NotificationManager.IMPORTANCE_LOW
-        ).apply { description = "Active while hand gesture control is running." }
+        ).apply { description = "Active while hand tracking and floating HUD are running." }
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(ch)
     }
 }
