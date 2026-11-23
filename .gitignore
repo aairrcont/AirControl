@@ -1,0 +1,24 @@
+# Gradle
+.gradle/
+build/
+**/build/
+local.properties
+
+# Android Studio
+.idea/
+*.iml
+*.iws
+*.ipr
+captures/
+.externalNativeBuild/
+.cxx/
+
+# MediaPipe model (large binary — downloaded by CI automatically)
+app/src/main/assets/hand_landmarker.task
+
+# Keep the placeholder
+!app/src/main/assets/hand_landmarker.task.PLACEHOLDER.txt
+
+# OS
+.DS_Store
+Thumbs.db

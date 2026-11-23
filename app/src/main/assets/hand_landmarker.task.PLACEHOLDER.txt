@@ -1,0 +1,13 @@
+PLACEHOLDER – DO NOT DELETE THIS FILE
+======================================
+This file must be replaced with the real MediaPipe Hand Landmarker model.
+
+Steps to download:
+  1. Visit: https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker
+  2. Download: hand_landmarker.task  (~8.7 MB)
+  3. Replace this file with it.
+  4. The file must be placed at:
+       app/src/main/assets/hand_landmarker.task
+
+The app will crash on launch of the gesture service if this placeholder
+remains in place. This is intentional so you know the model is missing.

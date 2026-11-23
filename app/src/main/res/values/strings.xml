@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AirControl</string>
+    <string name="accessibility_label">AirControl Gesture Service</string>
+    <string name="accessibility_description">AirControl uses the Accessibility Service to scroll, navigate, and control media using hand gestures detected by your front camera. No audio or video is uploaded or recorded.</string>
+    <string name="gesture_config_title">Gesture Settings</string>
+    <string name="calibration_title">Calibration</string>
+
+    <!-- Gesture names -->
+    <string name="gesture_swipe_up">Swipe Up</string>
+    <string name="gesture_swipe_down">Swipe Down</string>
+    <string name="gesture_swipe_left">Swipe Left</string>
+    <string name="gesture_swipe_right">Swipe Right</string>
+    <string name="gesture_open_palm">Open Palm</string>
+    <string name="gesture_closed_fist">Closed Fist</string>
+    <string name="gesture_two_fingers">Two Fingers Up</string>
+    <string name="gesture_thumb_up">Thumb Up</string>
+    <string name="gesture_thumb_down">Thumb Down</string>
+    <string name="gesture_pinch">Pinch</string>
+
+    <!-- Action names -->
+    <string name="action_scroll_up">Scroll Up</string>
+    <string name="action_scroll_down">Scroll Down</string>
+    <string name="action_next">Next</string>
+    <string name="action_previous">Previous</string>
+    <string name="action_pause">Pause</string>
+    <string name="action_play">Play</string>
+    <string name="action_back">Go Back</string>
+    <string name="action_volume_up">Volume Up</string>
+    <string name="action_volume_down">Volume Down</string>
+    <string name="action_select">Select / Open</string>
+
+    <!-- Notifications -->
+    <string name="notif_channel_name">Gesture Tracking</string>
+    <string name="notif_channel_desc">Active while AirControl gesture control is running</string>
+    <string name="notif_title">AirControl</string>
+    <string name="notif_tracking">Gesture tracking active</string>
+    <string name="notif_stop">Stop</string>
+</resources>

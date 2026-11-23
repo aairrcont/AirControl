@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Background -->
+    <color name="bg_dark">#FF0F0F14</color>
+    <color name="card_bg">#FF1A1A22</color>
+    <color name="chip_bg">#FF252535</color>
+    <color name="divider">#FF2A2A3A</color>
+
+    <!-- Accent -->
+    <color name="accent_green">#FF4FCB6E</color>
+    <color name="accent_red">#FFFF5370</color>
+    <color name="accent_blue">#FF4FC3F7</color>
+
+    <!-- Text -->
+    <color name="text_primary">#FFFFFFFF</color>
+    <color name="text_secondary">#FF9E9EAF</color>
+    <color name="white">#FFFFFFFF</color>
+
+    <!-- Material theme colours -->
+    <color name="colorPrimary">#FF4FCB6E</color>
+    <color name="colorPrimaryDark">#FF0F0F14</color>
+    <color name="colorAccent">#FF4FC3F7</color>
+    <color name="colorSurface">#FF1A1A22</color>
+    <color name="colorOnSurface">#FFFFFFFF</color>
+</resources>
